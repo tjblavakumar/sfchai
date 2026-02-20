@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # SF CHAI - Streamlit + eChart + AI
 
 **S**treamlit + **F**Charts + **C**harts + **H**elper + **AI**
@@ -96,3 +97,7 @@ SFCHAI/
 ## License
 
 MIT
+=======
+# sfchai
+chart mimic with new data
+>>>>>>> e85dce73d12957f391dd665b29194e22f1559907
