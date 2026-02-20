@@ -1,0 +1,35 @@
+# Git Setup and Push Commands for SFCHAI
+# Run these commands in your terminal from D:\lavakumar.baskaran\LavaCode\SFCHAI
+
+# 1. Initialize Git repository (if not already done)
+git init
+
+# 2. Configure Git user (local to this repo)
+git config user.name "tjblavakumar"
+git config user.email "tjblavakumar@gmail.com"
+
+# 3. Add all files
+git add .
+
+# 4. Create initial commit
+git commit -m "Initial commit: SF CHAI - Streamlit + Plotly chart generator with AI
+
+- Plotly-based chart generation for PCE YoY data
+- Direct chart generator bypassing AI for accurate reproduction
+- Inline labels positioned on chart lines
+- AWS Bedrock and OpenAI integration
+- Session management with SQLite
+- Sample data included in mydata folder"
+
+# 5. Add remote repository
+git remote add origin https://github.com/tjblavakumar/sfchai.git
+
+# 6. Push to GitHub (you'll be prompted for your GitHub token)
+git push -u origin main
+
+# If the branch is named 'master' instead of 'main', use:
+# git branch -M main
+# git push -u origin main
+
+# Note: When prompted for password, use your GitHub Personal Access Token
+# Generate token at: https://github.com/settings/tokens
