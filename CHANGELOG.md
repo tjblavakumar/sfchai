@@ -1,5 +1,51 @@
 # Changelog
 
+## Version 1.1 - Feature Release
+
+### New Features
+
+#### Export Functionality
+- **HTML Export**: Generate standalone HTML files that work offline
+  - Embedded Plotly library for offline use
+  - Includes source data and README
+  - Fully interactive charts
+  - Perfect for sharing with non-technical users
+  
+- **Python Export**: Generate editable Python scripts
+  - Data embedded in code (fully standalone)
+  - Complete with installation instructions
+  - Commented code for easy customization
+  - Great for developers and automation
+
+- **Smart File Management**:
+  - Exports saved to `downloads/` folder
+  - Timestamped filenames (YYYYMMDD_HHMM_type.zip)
+  - Automatic cleanup (keeps last 5 exports)
+  - Each export includes chart, data, and README
+
+#### Data Table Feature
+- **Automatic Detection**: AI detects data tables in reference images
+- **Period Comparisons**: Shows last N periods with values and changes
+- **Color-Coded Rows**: Each series uses its chart color
+- **Customizable**:
+  - Show/hide table
+  - Adjust number of periods
+  - Change font size and family
+  - Reposition table
+- **Metrics**: Values, percentage change, absolute change
+
+### Improvements
+- Enhanced progress indicators throughout the workflow
+- Better error handling and user feedback
+- Improved modification detection with LLM
+- More robust axis and grid styling options
+
+### Bug Fixes
+- Fixed table row ordering (header now appears at top)
+- Fixed DataFrame validation in export function
+- Improved font family support for tables
+- Better handling of annotation font sizes
+
 ## Version 1.0 - Initial Release
 
 ### Overview

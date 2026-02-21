@@ -400,12 +400,21 @@ Extract these elements:
 10. tooltips: Tooltip config
 11. data_labels: Boolean
 12. font_sizes: {axis_label, axis_title, legend}
+13. data_table: If there's a data table in the chart (usually at bottom showing comparisons):
+   - show: true/false
+   - position: "bottom_right", "bottom_left", "top_right", "top_left", "bottom_center"
+   - periods: number of time periods shown (e.g., 2 for last 2 months)
+   - metrics: array of metrics shown (e.g., ["value", "change_pct", "change_abs"])
+   - series_names: array of series names in the table
+   - font_size: font size of table text
+   - font_family: font family (e.g., "Arial", "Helvetica", "Courier New")
 
 IMPORTANT: Look carefully for:
 - Text labels at line ends = "inline" legend
 - Separate box with series names = "box" legend
 - Horizontal/vertical lines that aren't data = annotations
 - Exact colors of each series
+- Data tables showing period comparisons (often at bottom with values and % changes)
 
 Return ONLY this JSON (no code blocks):
 {
@@ -426,7 +435,16 @@ Return ONLY this JSON (no code blocks):
   },
   "tooltips": {"trigger": "axis"},
   "data_labels": false,
-  "font_sizes": {"axis_label": 11, "axis_title": 13, "legend": 12}
+  "font_sizes": {"axis_label": 11, "axis_title": 13, "legend": 12},
+  "data_table": {
+    "show": false,
+    "position": "bottom_right",
+    "periods": 2,
+    "metrics": ["value", "change_pct"],
+    "series_names": [],
+    "font_size": 10,
+    "font_family": "Arial"
+  }
 }
 """
 
@@ -489,6 +507,15 @@ def analyze_chart_image(client, image_base64: str) -> dict:
             "tooltips": {"trigger": "axis"},
             "data_labels": False,
             "font_sizes": {"axis_label": 11, "axis_title": 13, "legend": 12},
+            "data_table": {
+                "show": False,
+                "position": "bottom_right",
+                "periods": 2,
+                "metrics": ["value", "change_pct"],
+                "series_names": [],
+                "font_size": 10,
+                "font_family": "Arial"
+            },
             "_fallback": True,
             "_note": "Using fallback analysis - AI response could not be parsed"
         }

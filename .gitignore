@@ -36,3 +36,6 @@ Thumbs.db
 
 # Output files
 download.png
+
+# Export downloads
+downloads/

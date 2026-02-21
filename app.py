@@ -38,6 +38,9 @@ from ai_client import (
 
 from plotly_chart_generator import generate_plotly_chart, convert_plotly_to_json
 
+# Import export manager
+from export_manager import export_to_html, export_to_python
+
 # For ECharts rendering (keeping for backward compatibility)
 from streamlit_echarts import st_echarts
 
@@ -1048,27 +1051,32 @@ def handle_user_message(message: str):
             })
     
     elif phase == "generation":
-        # Chart is being generated or already generated - use LLM to detect intent
-        client = get_ai_client(st.session_state.ai_provider)
-        intent_result = detect_user_intent(
-            client, 
-            message, 
-            phase, 
-            st.session_state.get("current_proposal")
-        )
-        
-        intent = intent_result.get("intent")
-        
-        if intent == "modify":
-            # User wants to modify the generated chart
-            handle_chart_modification(message)
+        # Check for export requests first
+        message_lower = message.lower()
+        if any(keyword in message_lower for keyword in ["export", "download", "generate html", "generate python", "save as"]):
+            handle_export_request(message)
         else:
-            response = "Your chart has been generated! You can:\n- Ask me to modify it (e.g., 'change the color', 'add labels', 'make lines smooth')\n- Start a new chart by uploading new files"
-            st.session_state.chat_history.append({
-                "role": "assistant",
-                "content": response,
-                "metadata": {"type": "text", "timestamp": datetime.now()}
-            })
+            # Chart is being generated or already generated - use LLM to detect intent
+            client = get_ai_client(st.session_state.ai_provider)
+            intent_result = detect_user_intent(
+                client, 
+                message, 
+                phase, 
+                st.session_state.get("current_proposal")
+            )
+            
+            intent = intent_result.get("intent")
+            
+            if intent == "modify":
+                # User wants to modify the generated chart
+                handle_chart_modification(message)
+            else:
+                response = "Your chart has been generated! You can:\n- Ask me to modify it (e.g., 'change the color', 'add labels', 'make lines smooth')\n- Export it (e.g., 'export as HTML', 'export as Python')\n- Start a new chart by uploading new files"
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": response,
+                    "metadata": {"type": "text", "timestamp": datetime.now()}
+                })
 
 
 def handle_csv_upload(csv_file):
@@ -1392,6 +1400,11 @@ If user says:
 - "Change grid color" or "change gridline color" → Set grid.color to the specified color
 - "Hide grid" or "remove gridlines" → Set grid.show to false
 - "Show grid" → Set grid.show to true
+- "Show data table" or "add comparison table" → Set data_table.show to true
+- "Hide table" or "remove table" → Set data_table.show to false
+- "Show last 3 months in table" → Set data_table.periods to 3
+- "Make table bigger" → Increase data_table.font_size
+- "Change table font to Arial" → Set data_table.font_family to "Arial"
 
 For inline labels (not at ends), set:
 - legend_type: "inline_middle" (new type for labels in middle of chart)
@@ -1438,6 +1451,12 @@ Return JSON with:
     "grid_updates": {{
       "color": "#cccccc",
       "show": true
+    }},
+    "data_table_updates": {{
+      "show": true,
+      "position": "bottom_right",
+      "periods": 3,
+      "font_size": 12
     }},
     "axis_style_updates": {{
       "line_color": "#000000",
@@ -1583,6 +1602,14 @@ def apply_modifications_to_proposal(proposal: dict, modifications: dict) -> dict
         for key, value in grid_updates.items():
             updated["visual_config"]["grid"][key] = value
     
+    # Update data table
+    data_table_updates = mods.get("data_table_updates", {})
+    if data_table_updates:
+        if "data_table" not in updated["visual_config"]:
+            updated["visual_config"]["data_table"] = {}
+        for key, value in data_table_updates.items():
+            updated["visual_config"]["data_table"][key] = value
+    
     # Update axis style
     axis_style_updates = mods.get("axis_style_updates", {})
     if axis_style_updates:
@@ -1650,6 +1677,101 @@ def generate_chart_from_proposal():
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": f"⚠️ Error in chart generation: {str(e)}\n\nDetails:\n```\n{error_details}\n```",
+            "metadata": {"type": "text", "timestamp": datetime.now()}
+        })
+
+
+def handle_export_request(message: str):
+    """
+    Handle user request to export chart.
+    
+    Args:
+        message: User's export request
+    """
+    try:
+        # Get current chart and data
+        chart_json = st.session_state.get("chart_json")
+        csv_data = st.session_state.get("csv_data")
+        proposal = st.session_state.get("current_proposal")
+        
+        # Check if we have the required data (proper DataFrame check)
+        if chart_json is None or csv_data is None or csv_data.empty or proposal is None:
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": "⚠️ No chart found. Please generate a chart first.",
+                "metadata": {"type": "text", "timestamp": datetime.now()}
+            })
+            return
+        
+        # Determine export type
+        message_lower = message.lower()
+        
+        # Show progress
+        with st.spinner("📦 Creating export package..."):
+            if "html" in message_lower:
+                # Export as HTML
+                export_type = "HTML"
+                # Recreate Plotly figure
+                if chart_json.get("type") == "plotly":
+                    import plotly.graph_objects as go
+                    fig = go.Figure(chart_json["figure"])
+                else:
+                    # Convert ECharts to Plotly for export
+                    fig = generate_plotly_chart(proposal, csv_data)
+                
+                zip_path = export_to_html(fig, csv_data, proposal)
+                
+            elif "python" in message_lower or "py" in message_lower:
+                # Export as Python
+                export_type = "Python"
+                # Recreate Plotly figure
+                if chart_json.get("type") == "plotly":
+                    import plotly.graph_objects as go
+                    fig = go.Figure(chart_json["figure"])
+                else:
+                    fig = generate_plotly_chart(proposal, csv_data)
+                
+                zip_path = export_to_python(fig, csv_data, proposal)
+                
+            else:
+                # Default to HTML
+                export_type = "HTML"
+                if chart_json.get("type") == "plotly":
+                    import plotly.graph_objects as go
+                    fig = go.Figure(chart_json["figure"])
+                else:
+                    fig = generate_plotly_chart(proposal, csv_data)
+                
+                zip_path = export_to_html(fig, csv_data, proposal)
+        
+        # Success message
+        response = f"""✅ **{export_type} Export Created!**
+
+Your chart has been exported to:
+`{zip_path}`
+
+The zip file contains:
+- Chart file ({'chart.html' if export_type == 'HTML' else 'chart.py'})
+- Source data (data.csv)
+- README with instructions
+
+You can find it in the `downloads` folder.
+
+{'Open chart.html in any web browser - no installation needed!' if export_type == 'HTML' else 'Run the Python script with: python chart.py'}
+"""
+        
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": response,
+            "metadata": {"type": "text", "timestamp": datetime.now()}
+        })
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": f"⚠️ Error creating export: {str(e)}\n\nDetails:\n```\n{error_details}\n```",
             "metadata": {"type": "text", "timestamp": datetime.now()}
         })
 
@@ -2024,6 +2146,23 @@ def create_proposal_from_analysis(analysis: dict, csv_data: pd.DataFrame) -> dic
             "axis_style": {
                 "line_color": "#999999",
                 "line_width": 1
+            },
+            "data_table": analysis.get("data_table", {
+                "show": False,
+                "position": "bottom_right",
+                "periods": 2,
+                "metrics": ["value", "change_pct"],
+                "series_names": [],
+                "font_size": 10,
+                "font_family": "Arial"
+            }) if isinstance(analysis.get("data_table"), dict) else {
+                "show": False,
+                "position": "bottom_right",
+                "periods": 2,
+                "metrics": ["value", "change_pct"],
+                "series_names": [],
+                "font_size": 10,
+                "font_family": "Arial"
             }
         }
     }

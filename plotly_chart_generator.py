@@ -6,6 +6,7 @@ This addresses the limitation of ECharts for label positioning.
 import plotly.graph_objects as go
 import pandas as pd
 from typing import Dict, List, Optional
+from table_generator import calculate_table_data, create_table_text
 
 
 def generate_plotly_chart(proposal: dict, csv_data: pd.DataFrame) -> go.Figure:
@@ -255,6 +256,74 @@ def generate_plotly_chart(proposal: dict, csv_data: pd.DataFrame) -> go.Figure:
             zeroline=False
         )
     )
+    
+    # Add data table if configured
+    table_config = proposal["visual_config"].get("data_table", {})
+    if table_config.get("show", False):
+        table_data = calculate_table_data(csv_data, table_config, proposal["data_mapping"]["series"])
+        if table_data:
+            table_lines = create_table_text(table_data, table_config, proposal["data_mapping"]["series"])
+            
+            # Determine base position
+            position = table_config.get("position", "bottom_right")
+            if position == "bottom_right":
+                x_pos, y_pos = 0.98, 0.02
+                xanchor, yanchor = "right", "bottom"
+            elif position == "bottom_left":
+                x_pos, y_pos = 0.02, 0.02
+                xanchor, yanchor = "left", "bottom"
+            elif position == "bottom_center":
+                x_pos, y_pos = 0.5, 0.02
+                xanchor, yanchor = "center", "bottom"
+            elif position == "top_right":
+                x_pos, y_pos = 0.98, 0.98
+                xanchor, yanchor = "right", "top"
+            elif position == "top_left":
+                x_pos, y_pos = 0.02, 0.98
+                xanchor, yanchor = "left", "top"
+            else:
+                x_pos, y_pos = 0.98, 0.02
+                xanchor, yanchor = "right", "bottom"
+            
+            font_size = table_config.get("font_size", 10)
+            font_family = table_config.get("font_family", "Arial")
+            line_height = font_size * 1.5  # Line spacing
+            
+            # Calculate total table height to position from bottom correctly
+            total_lines = len(table_lines)
+            
+            # Add each line as a separate annotation to support different colors
+            for i, line_data in enumerate(table_lines):
+                # Calculate y offset for each line
+                # For bottom anchor: header at top (highest offset), data rows below
+                # For top anchor: header at top (no offset), data rows below (negative offset)
+                if yanchor == "bottom":
+                    # Reverse order: header should be at top
+                    y_offset = (total_lines - 1 - i) * line_height
+                else:  # top
+                    # Normal order: header first, then data rows
+                    y_offset = -i * line_height
+                
+                fig.add_annotation(
+                    x=x_pos,
+                    y=y_pos,
+                    xref="paper",
+                    yref="paper",
+                    yshift=y_offset,
+                    text=line_data["text"],
+                    showarrow=False,
+                    xanchor=xanchor,
+                    yanchor=yanchor,
+                    font=dict(
+                        size=font_size,
+                        family=font_family,
+                        color=line_data["color"]
+                    ),
+                    bgcolor="rgba(255, 255, 255, 0.9)" if i == 0 else "rgba(255, 255, 255, 0)",
+                    bordercolor="#cccccc" if i == 0 else "rgba(0, 0, 0, 0)",
+                    borderwidth=1 if i == 0 else 0,
+                    borderpad=8
+                )
     
     return fig
 
