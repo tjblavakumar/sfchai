@@ -171,6 +171,23 @@ class BedrockClient:
         try:
             return json.loads(text_content)
         except json.JSONDecodeError:
+            # Try to extract JSON from markdown code blocks
+            import re
+            json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text_content)
+            if json_match:
+                try:
+                    return json.loads(json_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+            
+            # Try to find JSON object in text
+            json_match = re.search(r'(\{[\s\S]*\})', text_content)
+            if json_match:
+                try:
+                    return json.loads(json_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+            
             # Return as raw text if not JSON
             return {"raw_text": text_content, "error": "Response was not valid JSON"}
     
@@ -195,10 +212,7 @@ class BedrockClient:
         Returns:
             Generated text
         """
-        messages = []
-        if system_prompt:
-            messages.append({"role": "assistant", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        messages = [{"role": "user", "content": prompt}]
         
         payload = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -206,6 +220,10 @@ class BedrockClient:
             "temperature": temperature,
             "messages": messages
         }
+        
+        # Add system prompt if provided
+        if system_prompt:
+            payload["system"] = system_prompt
         
         response = self.client.invoke_model(
             modelId=model_id,
@@ -362,53 +380,54 @@ def get_ai_client(provider: str = "bedrock"):
 # Vision Analysis Prompt
 # ============================================================================
 
-VISION_ANALYSIS_PROMPT = """You are an expert chart analyst. Analyze the reference chart image and provide a detailed structured description in JSON format.
+VISION_ANALYSIS_PROMPT = """Analyze this chart image and return a JSON description. Respond with ONLY valid JSON - no markdown, no explanations.
 
-Analyze and extract:
-1. **chart_type**: The type of chart (line, bar, stacked_bar, pie, scatter, area, combo_line_bar)
-2. **title**: Chart title text, position, font size, font weight, color (null if no title)
-3. **x_axis**: X-axis type (category, value, time), label, name, position, grid lines, ticks, font size
-4. **y_axis**: Y-axis type (category, value, time), label, name, position, grid lines, ticks, number formatting, font size
-5. **legend**: CRITICAL - Specify if labels are:
-   - "inline": Labels appear ON the chart lines at the end (no legend box)
-   - "box": Traditional legend box with position (top/bottom/left/right)
-6. **series**: Array of data series with:
-   - name: Series name (extract from chart)
-   - type: line, bar, area
-   - color: Hex color if visible
-   - stack: Stack group if stacked
-   - smooth: Whether line is smoothed/curved
-   - line_width: Line thickness (1-5)
-   - area_fill: Whether area is filled
-7. **colors**: Array of hex color codes used (in order)
-8. **grid**: Grid lines, spacing, background
-9. **annotations**: Any annotations, labels, markers
-10. **tooltips**: Tooltip formatting
-11. **data_labels**: Whether data labels are shown on points
-12. **font_sizes**: Object with axis_label, axis_title, legend sizes
+Extract these elements:
+1. chart_type: line, bar, stacked_bar, pie, scatter, area
+2. title: Chart title (null if none)
+3. x_axis: Type (category/value/time), label, font size
+4. y_axis: Type, label, font size
+5. legend: 
+   - "inline": Labels at line ends (no legend box)
+   - "box": Separate legend box with position
+6. series: Array with name, type, color (hex), smooth (true/false), line_width
+7. colors: Array of hex colors in order
+8. grid: Grid visibility
+9. annotations:
+   - horizontal_lines: [{value, label, color, style}] for horizontal reference lines
+   - vertical_lines: [{value, label, color, style}] for vertical reference lines
+   - bands: [{start, end, label, color}] for shaded regions
+10. tooltips: Tooltip config
+11. data_labels: Boolean
+12. font_sizes: {axis_label, axis_title, legend}
 
-Return ONLY valid JSON like:
-```json
+IMPORTANT: Look carefully for:
+- Text labels at line ends = "inline" legend
+- Separate box with series names = "box" legend
+- Horizontal/vertical lines that aren't data = annotations
+- Exact colors of each series
+
+Return ONLY this JSON (no code blocks):
 {
   "chart_type": "line",
   "title": null,
-  "x_axis": {"type": "time", "name": null, "font_size": 12},
-  "y_axis": {"type": "value", "name": null, "font_size": 12},
+  "x_axis": {"type": "time", "name": null, "font_size": 11},
+  "y_axis": {"type": "value", "name": null, "font_size": 11},
   "legend": {"type": "inline", "position": "right"},
   "series": [
-    {"name": "Headline", "type": "line", "color": "#1f77b4", "smooth": true, "line_width": 2},
-    {"name": "Core", "type": "line", "color": "#ff7f0e", "smooth": true, "line_width": 2}
+    {"name": "Series1", "type": "line", "color": "#1f77b4", "smooth": true, "line_width": 2}
   ],
   "colors": ["#1f77b4", "#ff7f0e"],
   "grid": {"show": true},
-  "annotations": [],
+  "annotations": {
+    "horizontal_lines": [{"value": 2.0, "label": "Target", "color": "#000000", "style": "dashed"}],
+    "vertical_lines": [],
+    "bands": []
+  },
   "tooltips": {"trigger": "axis"},
   "data_labels": false,
   "font_sizes": {"axis_label": 11, "axis_title": 13, "legend": 12}
 }
-```
-
-If you cannot determine a value, use null or a best guess.
 """
 
 
@@ -423,105 +442,122 @@ def analyze_chart_image(client, image_base64: str) -> dict:
     Returns:
         Chart analysis as dict
     """
-    return client.analyze_image(
+    result = client.analyze_image(
         image_base64=image_base64,
         prompt=VISION_ANALYSIS_PROMPT
     )
+    
+    # If result has error, try to extract JSON from raw_text
+    if isinstance(result, dict) and result.get("error") == "Response was not valid JSON":
+        raw_text = result.get("raw_text", "")
+        
+        # Try to extract JSON from markdown code blocks
+        import re
+        json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', raw_text)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # Try to find JSON object in text
+        json_match = re.search(r'(\{[\s\S]*\})', raw_text)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # Create a basic fallback analysis
+        fallback = {
+            "chart_type": "line",
+            "title": None,
+            "x_axis": {"type": "time", "name": None, "font_size": 11},
+            "y_axis": {"type": "value", "name": None, "font_size": 11},
+            "legend": {"type": "inline", "position": "right"},
+            "series": [
+                {"name": "Series 1", "type": "line", "color": "#1f77b4", "smooth": True, "line_width": 2},
+                {"name": "Series 2", "type": "line", "color": "#ff7f0e", "smooth": True, "line_width": 2}
+            ],
+            "colors": ["#1f77b4", "#ff7f0e"],
+            "grid": {"show": True},
+            "annotations": {
+                "horizontal_lines": [],
+                "vertical_lines": [],
+                "bands": []
+            },
+            "tooltips": {"trigger": "axis"},
+            "data_labels": False,
+            "font_sizes": {"axis_label": 11, "axis_title": 13, "legend": 12},
+            "_fallback": True,
+            "_note": "Using fallback analysis - AI response could not be parsed"
+        }
+        
+        # Return error with fallback
+        return {
+            "error": "Could not parse JSON from response - using fallback analysis",
+            "raw_text": raw_text[:500] if len(raw_text) > 500 else raw_text,
+            "fallback_analysis": fallback
+        }
+    
+    return result
 
 
 # ============================================================================
 # Chart Generation Prompt
 # ============================================================================
 
-CHART_GENERATION_PROMPT = """You are an Apache ECharts expert. Generate a valid ECharts v5 option JSON that replicates the reference chart style using the provided CSV data.
+CHART_GENERATION_PROMPT = """Generate an ECharts v5 option JSON that matches the reference chart using the CSV data.
 
-## Reference Chart Analysis:
+Reference Chart Analysis:
 {analysis_json}
 
-## CSV Data:
+CSV Data:
 {csv_info}
 
-## Your Task:
-1. Create a valid ECharts v5 option JSON object
-2. Match the reference chart style EXACTLY (colors, fonts, layout, legend, grid, line smoothness, etc.)
-3. Map CSV columns to series/axes appropriately
-4. Return ONLY valid JSON (no markdown, no explanations)
+CRITICAL Requirements:
+1. Include ALL series from CSV
+2. Use exact colors from reference
+3. Set smooth:true and smoothMonotone:"x" for line charts
+4. Legend type:
+   - "inline" → add endLabel to each series with distance:10, NO legend component
+   - "box" → add legend component, NO endLabel
+5. Annotations (IMPORTANT - correct placement):
+   - horizontal_lines → Add to series[0].markLine.data with yAxis
+   - vertical_lines → Add to series[0].markLine.data with xAxis
+   - bands → Add to series[0].markArea.data
+6. Grid margins: left:"8%", right:"25%", top:"8%", bottom:"8%"
+7. Include ALL data points (don't truncate)
 
-## IMPORTANT - Data Format:
-- If CSV shows "pivoted from long format", the data has ALREADY been transformed
-- Use the column names shown in the pivoted data directly
-- First column is typically the x-axis (dates/categories)
-- Other columns are series data
-- Include ALL series from the CSV (don't skip any)
-
-## IMPORTANT - Legend Placement:
-- If reference shows "inline" legend type, use endLabel on each series (NO legend box)
-- If reference shows "box" legend type, use legend with appropriate position
-- For inline labels: place at end of lines with proper fontSize
-
-## IMPORTANT - Line Smoothness:
-- If reference shows smooth/curved lines, use: "smooth": true, "smoothMonotone": "x"
-- If reference shows straight lines, use: "smooth": false
-
-## ECharts Option Structure (with inline labels on lines):
-```json
+Return ONLY valid JSON (no markdown, no code blocks):
 {{
-  "tooltip": {{ "trigger": "axis", "axisPointer": {{ "type": "line" }} }},
-  "toolbox": {{ "feature": {{ "saveAsImage": {{}} }} }},
-  "xAxis": {{ 
-    "type": "category", 
-    "data": ["2019-01", "2019-02", ...], 
-    "boundaryGap": false,
-    "axisLabel": {{ "fontSize": 11 }}
+  "tooltip": {{"trigger": "axis"}},
+  "toolbox": {{"feature": {{"saveAsImage": {{}}}}}},
+  "xAxis": {{
+    "type": "category",
+    "data": [/* ALL dates */],
+    "boundaryGap": false
   }},
-  "yAxis": {{ 
-    "type": "value",
-    "axisLabel": {{ "fontSize": 11 }}
-  }},
+  "yAxis": {{"type": "value"}},
   "series": [
-    {{ 
-      "name": "YoY_pce_headline", 
-      "type": "line", 
-      "data": [1.43, 1.40, ...], 
+    {{
+      "name": "Series1",
+      "type": "line",
+      "data": [/* ALL values */],
       "smooth": true,
       "smoothMonotone": "x",
-      "lineStyle": {{ "width": 2 }},
-      "itemStyle": {{ "color": "#1f77b4" }},
-      "endLabel": {{ "show": true, "formatter": "{{a}}", "fontSize": 12, "distance": 5 }}
-    }},
-    {{ 
-      "name": "YoY_pce_core", 
-      "type": "line", 
-      "data": [1.84, 1.74, ...], 
-      "smooth": true,
-      "smoothMonotone": "x",
-      "lineStyle": {{ "width": 2 }},
-      "itemStyle": {{ "color": "#ff7f0e" }},
-      "endLabel": {{ "show": true, "formatter": "{{a}}", "fontSize": 12, "distance": 5 }}
+      "itemStyle": {{"color": "#5470c6"}},
+      "endLabel": {{"show": true, "formatter": "{{{{a}}}}", "fontSize": 12, "distance": 10}},
+      "markLine": {{
+        "data": [
+          {{"yAxis": 2.0, "label": {{"formatter": "2%"}}, "lineStyle": {{"type": "dashed", "color": "#000000"}}}},
+          {{"xAxis": "2020-01-01", "lineStyle": {{"color": "#cccccc", "type": "solid"}}}}
+        ]
+      }}
     }}
   ],
-  "grid": {{ "left": "8%", "right": "22%", "top": "8%", "bottom": "8%", "containLabel": true }}
+  "grid": {{"left": "8%", "right": "25%", "top": "8%", "bottom": "8%"}}
 }}
-```
-
-## Critical Rules:
-- DO NOT include title if reference has no title
-- Use exact colors from reference analysis
-- Match chart type from analysis (line/bar/combo)
-- Include ALL data points in series data arrays (don't truncate)
-- Include ALL series from CSV data
-- Use smooth:true and smoothMonotone:"x" for smooth line charts
-- Set lineStyle width to 2 for visibility
-- If reference shows inline labels, use endLabel (no legend box)
-- If reference shows legend box, use legend with correct position
-- Ensure xAxis data array has ALL x-values from CSV
-- Ensure each series data array has values for ALL x-values
-- Increase right grid margin to 22% when using endLabel to prevent label cutoff
-- Add distance: 5 to endLabel to space labels from line endpoints
-- Set boundaryGap to false for time-series line charts
-- Match font sizes from reference analysis
-
-Now generate the ECharts JSON:
 """
 
 
@@ -538,53 +574,67 @@ def generate_chart_json(client, analysis: dict, csv_data, csv_info: str) -> dict
     Returns:
         ECharts option JSON or mismatch object
     """
-    # Pivot data if in long format
-    if 'key' in csv_data.columns and 'value' in csv_data.columns:
-        csv_data = csv_data.pivot(index='date', columns='key', values='value').reset_index()
-    
-    # Format the prompt with analysis and CSV info
-    prompt = CHART_GENERATION_PROMPT.format(
-        analysis_json=json.dumps(analysis),
-        csv_info=csv_info
-    )
-    
-    # Generate chart JSON using text-only model
-    result = client.generate_text(prompt=prompt)
-    
-    # Try to parse the result as JSON
     try:
-        chart_json = json.loads(result)
-        return chart_json
-    except json.JSONDecodeError:
-        pass
-    
-    # Try to extract JSON from response
-    import re
-    json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', result)
-    if not json_match:
-        json_match = re.search(r'\{[\s\S]*\}', result)
-    
-    if json_match:
+        # Pivot data if in long format
+        if 'key' in csv_data.columns and 'value' in csv_data.columns:
+            csv_data = csv_data.pivot(index='date', columns='key', values='value').reset_index()
+        
+        # Format the prompt with analysis and CSV info
+        prompt = CHART_GENERATION_PROMPT.format(
+            analysis_json=json.dumps(analysis),
+            csv_info=csv_info
+        )
+        
+        # Generate chart JSON using text-only model
+        result = client.generate_text(prompt=prompt)
+        
+        # Try to parse the result as JSON
         try:
-            chart_json = json.loads(json_match.group())
+            chart_json = json.loads(result)
             return chart_json
         except json.JSONDecodeError:
             pass
-    
-    # Fallback chart
-    try:
-        fallback_chart = create_fallback_chart(analysis, csv_data)
-        if fallback_chart:
-            return fallback_chart
-    except:
-        pass
-    
-    return {
-        "mismatch": True,
-        "reason": f"AI returned non-JSON response.",
-        "clarifying_questions": ["Try uploading a simpler reference chart."],
-        "raw_response": result[:1000] if len(result) > 1000 else result
-    }
+        
+        # Try to extract JSON from response
+        import re
+        json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', result)
+        if json_match:
+            try:
+                chart_json = json.loads(json_match.group(1))
+                return chart_json
+            except (json.JSONDecodeError, IndexError):
+                pass
+        
+        # Try without code blocks
+        json_match = re.search(r'(\{[\s\S]*\})', result)
+        if json_match:
+            try:
+                chart_json = json.loads(json_match.group(1))
+                return chart_json
+            except (json.JSONDecodeError, IndexError):
+                pass
+        
+        # Fallback chart
+        try:
+            fallback_chart = create_fallback_chart(analysis, csv_data)
+            if fallback_chart:
+                return fallback_chart
+        except Exception as fallback_error:
+            pass
+        
+        return {
+            "mismatch": True,
+            "reason": f"AI returned non-JSON response.",
+            "clarifying_questions": ["Try uploading a simpler reference chart."],
+            "raw_response": result[:1000] if len(result) > 1000 else result
+        }
+    except Exception as e:
+        return {
+            "mismatch": True,
+            "reason": f"Error generating chart: {str(e)}",
+            "clarifying_questions": ["Check your data format and try again."],
+            "raw_response": ""
+        }
 
 
 def create_fallback_chart(analysis: dict, csv_data) -> dict:
@@ -626,6 +676,10 @@ def create_fallback_chart(analysis: dict, csv_data) -> dict:
     legend_info = analysis.get("legend", {})
     use_inline_labels = legend_info.get("type") == "inline" if isinstance(legend_info, dict) else True
     
+    # Get annotations from analysis
+    annotations = analysis.get("annotations", {})
+    horizontal_lines = annotations.get("horizontal_lines", []) if isinstance(annotations, dict) else []
+    
     # Other columns are series
     series = []
     for i, col in enumerate(columns[1:]):
@@ -646,6 +700,28 @@ def create_fallback_chart(analysis: dict, csv_data) -> dict:
                     "formatter": "{a}",
                     "fontSize": 12,
                     "distance": 5
+                }
+            # Add markLine to first series if horizontal lines exist
+            if i == 0 and horizontal_lines:
+                mark_data = []
+                for hline in horizontal_lines:
+                    mark_data.append({
+                        "yAxis": hline.get("value"),
+                        "name": hline.get("label", ""),
+                        "lineStyle": {
+                            "color": hline.get("color", "#ff0000"),
+                            "type": hline.get("style", "dashed"),
+                            "width": 2
+                        },
+                        "label": {
+                            "show": True,
+                            "position": "end",
+                            "formatter": "{b}: {c}"
+                        }
+                    })
+                series_config["markLine"] = {
+                    "silent": True,
+                    "data": mark_data
                 }
             series.append(series_config)
     
@@ -745,8 +821,8 @@ def generate_summary(client, csv_data, chart_analysis: dict, chart_config: dict)
     # Format the prompt
     prompt = SUMMARY_PROMPT.format(
         csv_info=csv_info,
-        chart_analysis=json.dumps(chart_analysis),
-        chart_config=json.dumps(chart_config)
+        chart_analysis=json.dumps(chart_analysis) if chart_analysis else "None",
+        chart_config=json.dumps(chart_config) if chart_config else "None"
     )
     
     # Generate summary
@@ -784,42 +860,44 @@ def _get_csv_info_for_summary(df) -> str:
 # Chat Interface
 # ============================================================================
 
-CHAT_SYSTEM_PROMPT = """You are a helpful data visualization assistant for SF CHAI. You help users understand their data, modify charts, and answer questions.
+CHAT_SYSTEM_PROMPT = """You are a chart customization assistant. Help users modify their ECharts visualization.
 
-## Current Session Context:
+Context:
 - CSV Data: {csv_info}
-- Reference Chart Analysis: {chart_analysis}
-- Current Chart Configuration: {chart_config}
-- Executive Summary: {summary}
+- Chart Analysis: {chart_analysis}
+- Current Chart: {chart_config}
 
-## Your Capabilities:
-1. **Answer questions** about the data and charts
-2. **Modify charts** - Change colors, styles, data mappings, filters
-3. **Regenerate summaries** - Update the executive summary
-4. **Provide insights** - Explain trends, patterns, anomalies
+Actions you can take:
 
-## When user asks for chart modifications:
-If user wants to modify the chart (e.g., "make it stacked", "use column X for series A", "filter to last 6 months"):
-- Return a JSON response with the changes:
-```json
-{{
-  "action": "modify_chart",
-  "changes": {{
-    "property": "value"
-  }}
-}}
-```
+1. Regenerate Summary:
+{{"action": "regenerate_summary"}}
 
-## When user asks questions:
-- Provide helpful, accurate answers based on the data
-- Use specific numbers from the data
+2. Modify Chart:
+{{"action": "modify_chart", "changes": {{...}}}}
 
-## Response Format:
-- For chart modifications: Return JSON with "action" and "changes"
-- For questions: Return plain text response
-- Be concise and helpful
+3. Answer Questions:
+{{"action": "text", "response": "..."}}
 
-User message: {user_message}
+Common Modifications:
+
+Colors: series[0].itemStyle.color = "#ff0000"
+Fonts: xAxis.axisLabel.fontSize = 14
+Legend: legend.position = "bottom"
+
+Annotations:
+- Vertical line: series[0].markLine.data = [{{"xAxis": "2020-01-01"}}]
+- Horizontal line: series[0].markLine.data = [{{"yAxis": 2.0}}]
+- Shaded band: series[0].markArea.data = [[{{"xAxis": "2020-03"}}, {{"xAxis": "2020-10"}}]]
+
+IMPORTANT:
+- markLine = single line (vertical or horizontal)
+- markArea = shaded region/band
+- "Add vertical line at 2020" → use markLine with xAxis
+- "Add band from 2020 to 2021" → use markArea
+
+User: {user_message}
+
+Respond with JSON only:
 """
 
 
@@ -864,6 +942,17 @@ def process_chat_message(client, user_message: str, csv_data, chart_analysis: di
             return response_data
     except json.JSONDecodeError:
         pass
+    
+    # Try to extract JSON from markdown code blocks
+    import re
+    json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', result)
+    if json_match:
+        try:
+            response_data = json.loads(json_match.group(1))
+            if isinstance(response_data, dict) and "action" in response_data:
+                return response_data
+        except json.JSONDecodeError:
+            pass
     
     # Return as text response
     return {
